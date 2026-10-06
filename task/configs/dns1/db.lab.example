@@ -1,0 +1,5 @@
+$TTL 60
+@ IN SOA ns1.lab.example. hostmaster.lab.example. 1 60 60 60 60
+@ IN NS ns1.lab.example.
+ns1 IN A 10.14.20.53
+app IN A 10.14.30.80

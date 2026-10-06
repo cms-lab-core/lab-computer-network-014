@@ -1,0 +1,243 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frr-r1-config
+  namespace: $NAME
+data:
+  daemons: |-
+    zebra=yes
+    bgpd=no
+    ospfd=no
+    ospf6d=no
+    ripd=no
+    ripngd=no
+    isisd=no
+    pimd=no
+    ldpd=no
+    nhrpd=no
+    eigrpd=no
+    babeld=no
+    sharpd=no
+    pbrd=no
+    bfdd=no
+    fabricd=no
+    vrrpd=no
+    pathd=no
+    staticd=yes
+    
+    vtysh_enable=yes
+    zebra_options="-A 127.0.0.1 -s 90000000"
+    staticd_options="-A 127.0.0.1"
+    
+  frr.conf: |-
+    frr version 10.7.1
+    frr defaults traditional
+    hostname r1
+    log stdout informational
+    service integrated-vtysh-config
+    interface eth1
+     ip address 10.14.1.1/24
+     exit
+    interface eth2
+     ip address 10.14.12.1/30
+     exit
+    !
+    end
+    
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frr-r2-config
+  namespace: $NAME
+data:
+  daemons: |-
+    zebra=yes
+    bgpd=no
+    ospfd=no
+    ospf6d=no
+    ripd=no
+    ripngd=no
+    isisd=no
+    pimd=no
+    ldpd=no
+    nhrpd=no
+    eigrpd=no
+    babeld=no
+    sharpd=no
+    pbrd=no
+    bfdd=no
+    fabricd=no
+    vrrpd=no
+    pathd=no
+    staticd=yes
+    
+    vtysh_enable=yes
+    zebra_options="-A 127.0.0.1 -s 90000000"
+    staticd_options="-A 127.0.0.1"
+    
+  frr.conf: |-
+    frr version 10.7.1
+    frr defaults traditional
+    hostname r2
+    log stdout informational
+    service integrated-vtysh-config
+    interface eth1
+     ip address 10.14.12.2/30
+     exit
+    interface eth2
+     ip address 10.14.20.1/24
+     exit
+    interface eth3
+     ip address 10.14.30.1/24
+     exit
+    !
+    end
+    
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dns-config
+  namespace: $NAME
+data:
+  named.conf: |-
+    options {
+      directory "/var/cache/bind";
+      listen-on { any; };
+      listen-on-v6 { none; };
+      recursion no;
+      allow-query { any; };
+    };
+    zone "lab.example" {
+      type primary;
+      file "/var/lib/bind/db.lab.example";
+    };
+    
+  db.lab.example: |-
+    $TTL 60
+    @ IN SOA ns1.lab.example. hostmaster.lab.example. 1 60 60 60 60
+    @ IN NS ns1.lab.example.
+    ns1 IN A 10.14.20.53
+    app IN A 10.14.30.80
+    
+---
+apiVersion: c9s.run/v1alpha1
+kind: Topology
+metadata:
+  name: $NAME
+  namespace: $NAME
+spec:
+  expose:
+    exposeType: ClusterIP
+  deployment:
+    filesFromConfigMap:
+      r1:
+        - filePath: configs/r1/daemons
+          configMapName: frr-r1-config
+          configMapPath: daemons
+          mode: read
+        - filePath: configs/r1/frr.conf
+          configMapName: frr-r1-config
+          configMapPath: frr.conf
+          mode: read
+      r2:
+        - filePath: configs/r2/daemons
+          configMapName: frr-r2-config
+          configMapPath: daemons
+          mode: read
+        - filePath: configs/r2/frr.conf
+          configMapName: frr-r2-config
+          configMapPath: frr.conf
+          mode: read
+      dns1:
+        - filePath: configs/dns1/named.conf
+          configMapName: dns-config
+          configMapPath: named.conf
+          mode: read
+        - filePath: configs/dns1/db.lab.example
+          configMapName: dns-config
+          configMapPath: db.lab.example
+          mode: read
+  naming: non-prefixed
+  definition:
+    containerlab: |-
+      name: $NAME
+      topology:
+        defaults:
+          labels:
+            flow_direction: LR
+        groups:
+          routers:
+            kind: linux
+            image: quay.io/frrouting/frr:containerlab-10.7.1
+          hosts:
+            kind: linux
+            image: ghcr.io/nicolaka/netshoot:v0.16
+        nodes:
+          pc1:
+            group: hosts
+            labels:
+              flow_icon: pc
+            exec:
+              - /bin/sh -c "adduser -D -s /bin/sh admin 2>/dev/null || true"
+              - /bin/sh -c "echo admin:admin | chpasswd"
+              - ssh-keygen -A
+              - mkdir -p /run/sshd
+              - /bin/sh -c "echo PasswordAuthentication=yes >> /etc/ssh/sshd_config"
+              - /usr/sbin/sshd
+              - ip link set eth1 up
+              - ip addr replace 10.14.1.10/24 dev eth1
+          r1:
+            group: routers
+            labels:
+              flow_icon: router
+            binds:
+              - configs/r1/daemons:/etc/frr/daemons
+              - configs/r1/frr.conf:/etc/frr/frr.conf
+            exec:
+              - /bin/sh -c "echo admin:admin | chpasswd"
+              - sysctl -w net.ipv4.ip_forward=1
+          r2:
+            group: routers
+            labels:
+              flow_icon: router
+            binds:
+              - configs/r2/daemons:/etc/frr/daemons
+              - configs/r2/frr.conf:/etc/frr/frr.conf
+            exec:
+              - /bin/sh -c "echo admin:admin | chpasswd"
+              - sysctl -w net.ipv4.ip_forward=1
+          dns1:
+            kind: linux
+            image: internetsystemsconsortium/bind9:9.20
+            labels:
+              flow_icon: server
+            binds:
+              - configs/dns1/named.conf:/etc/bind/named.conf
+              - configs/dns1/db.lab.example:/var/lib/bind/db.lab.example
+            exec:
+              - ip link set eth1 up
+              - ip addr replace 10.14.20.53/24 dev eth1
+              - ip route replace 10.14.1.0/24 via 10.14.20.1 dev eth1
+          web1:
+            group: hosts
+            labels:
+              flow_icon: server
+            exec:
+              - /bin/sh -c "adduser -D -s /bin/sh admin 2>/dev/null || true"
+              - /bin/sh -c "echo admin:admin | chpasswd"
+              - ssh-keygen -A
+              - mkdir -p /run/sshd
+              - /bin/sh -c "echo PasswordAuthentication=yes >> /etc/ssh/sshd_config"
+              - /usr/sbin/sshd
+              - ip link set eth1 up
+              - ip addr replace 10.14.30.80/24 dev eth1
+              - ip route replace 10.14.1.0/24 via 10.14.30.1 dev eth1
+              - mkdir -p /tmp/www
+              - /bin/sh -c "printf '<html><body>cms-network-capstone-ok</body></html>\\n' > /tmp/www/index.html"
+        links:
+          - endpoints: ["pc1:eth1", "r1:eth1"]
+          - endpoints: ["r1:eth2", "r2:eth1"]
+          - endpoints: ["r2:eth2", "dns1:eth1"]
+          - endpoints: ["r2:eth3", "web1:eth1"]
